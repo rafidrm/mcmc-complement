@@ -2,11 +2,12 @@ import numpy as np
 from pathlib import Path
 import pickle
 from pprint import pprint
+import pulp
 from scipy.optimize import linprog
-import pdb
+import pudb 
 
 
-def check_lpsolver(A_mat, b_vec):
+def OLD_check_lpsolver(A_mat, b_vec):
     m, n = A_mat.shape
     c_vec = np.ones(n)
     # c_vec = np.zeros(n)
@@ -17,6 +18,23 @@ def check_lpsolver(A_mat, b_vec):
         return True
     else:
         return False
+
+
+def check_lpsolver(c_vec, A_mat, b_vec):
+    prob = pulp.LpProblem('prob', pulp.LpMinimize)
+    m, n = A_mat.shape
+    x = [pulp.LpVariable('x{}'.format(ix)) for ix in range(n)]
+    prob += pulp.lpSum([ ci * xi for ci, xi in zip(c_vec, x) ])
+    for ix in range(m):
+        prob += pulp.lpSum([ ai * xi for ai, xi in zip(A_mat[ix], x) ]) >= b_vec[ix], 'con{}'.format(ix)
+    prob.solve(pulp.GLPK(msg=0))
+    if prob.status in [1, -2]:
+        return True
+        # x_vec = np.array([ xi.varValue for xi in x ])
+        #return x_vec
+    else:
+        return False
+        #return None
 
 
 def readmps(fname):
@@ -126,6 +144,7 @@ def readmps(fname):
 
     col_names = sorted(list(set(col_names)))
     rows_to_remove = []
+    c_dict = {}
     new_rows = [] 
     for row in row_dict:
         # create a new entry for column vector
@@ -133,6 +152,8 @@ def readmps(fname):
         for col in row_dict[row]['cols']:
             row_dict[row]['row_vec'][col] = row_dict[row]['cols'][col]
         if row_dict[row]['sign'] == 'N':
+            row_dict[row]['row_vec'][col] = row_dict[row]['cols'][col]
+            c_dict = row_dict[row].copy()
             rows_to_remove.append(row)
         # if LEQ constraint, then swap signs
         if row_dict[row]['sign'] == 'L':
@@ -157,6 +178,7 @@ def readmps(fname):
 
     row_names = sorted(list(row_dict.keys()))
     m, n = len(row_names), len(col_names)
+    c_vec = np.zeros(n)
     A_mat = np.zeros((m, n))
     b_vec = np.zeros(m)
     for ix in range(m):
@@ -165,8 +187,10 @@ def readmps(fname):
             col = col_names[iy]
             A_mat[ix, iy] = row_dict[row]['row_vec'][col]
         b_vec[ix] = row_dict[row]['rhs']
+    for ix in range(n):
+        c_vec[ix] = c_dict['row_vec'][col_names[iy]]
 
-    return A_mat, b_vec
+    return c_vec, A_mat, b_vec
 
 
 def find_and_replace_mps(pname, make_relaxation=False, n_relaxations=1):
@@ -174,18 +198,24 @@ def find_and_replace_mps(pname, make_relaxation=False, n_relaxations=1):
     for fname in p.iterdir():
         if fname.suffix == '.mps':
             print(fname)
-            A_mat, b_vec = readmps(fname)
+            c_vec, A_mat, b_vec = readmps(fname)
+            b_vec = b_vec - np.random.exponential(scale=100, size=len(b_vec))
+            for ix in range(len(A_mat)):
+                A_mat[ix] = A_mat[ix] / np.linalg.norm(A_mat[ix])
+                b_vec[ix] = b_vec[ix] / np.linalg.norm(A_mat[ix])
             print('... read')
-            feas_exists = check_lpsolver(A_mat, b_vec)
+            feas_exists = check_lpsolver(c_vec, A_mat, b_vec)
             if feas_exists is True:
                 m, n = A_mat.shape
-                for ix in range(m):
-                    A_mat[ix] = A_mat[ix] / np.linalg.norm(A_mat[ix])
-                    b_vec[ix] = b_vec[ix] / np.linalg.norm(A_mat[ix])
                 if make_relaxation is True:
                     for ix in range(n_relaxations):
                         b_relax = b_vec - np.random.exponential(scale=1, size=m)
-                        feas_set = { 'A_mat': A_mat, 'b_vec': b_vec, 'b_relax': b_relax }
+                        feas_set = { 
+                            'A_mat': A_mat,
+                            'b_vec': b_vec,
+                            'b_relax': b_relax,
+                            'c_vec': c_vec
+                        }
                         fname_pickle = p / (fname.stem + '_R{}.pickle'.format(ix+1))
                         with open(fname_pickle, 'wb') as f:
                             pickle.dump(feas_set, f)
