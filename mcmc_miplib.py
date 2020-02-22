@@ -51,17 +51,18 @@ def hit_n_run_init(c_vec, A_mat, b_vec):
     Generate an initial decision in the interior of the feasible set.
     """
     n = len(c_vec)
-    vtx1 = lp_solver(
-        c_vec,
-        A_mat,
-        b_vec
-    )
     vtx0 = lp_solver(
         np.zeros(n),
         A_mat,
         b_vec + np.random.exponential(scale=1e-1)
     )
-    vertices = [vtx0, vtx1]
+    # vtx1 = lp_solver(
+    #     c_vec,
+    #     A_mat,
+    #     b_vec
+    # )
+    vertices = [vtx0]
+    # vertices = [vtx0, vtx1]
     for row in A_mat:
         vtx2 = lp_solver(
             row,
@@ -178,17 +179,31 @@ def get_next_bd_pt(A_mat, b_vec, bd_pt, dir_pt):
     weight = min(weights)
     tmp = bd_pt + weight * dir_pt
     if is_bd(A_mat, b_vec, tmp) == False:
-        # pu.db
         print('not bd.')
 
     return bd_pt + weight * dir_pt
 
+
+def shuffle_A_b(A_mat, b_vec):
+    """
+    Shuffle the rows of the A matrix and b vector accordingly.
+    """
+    m, n = A_mat.shape
+    A_new = np.zeros((m, n))
+    b_new = np.zeros(m)
+    reorder = np.random.permutation(list(range(m)))
+    for i, j in enumerate(reorder):
+        A_new[i] = A_mat[j]
+        b_new[i] = b_vec[j]
+    return A_new, b_new
+    
 
 def mixed_test_set(c_vec, A_mat, b_vec, n_samples, scale=1):
     """
     Will generate feasible points using hitnrun.
     and infeasible points using shakenbake and projection.
     """
+    A_mat, b_vec = shuffle_A_b(A_mat, b_vec)
     feas_n_samples = int(n_samples / 2)
     proj_n_samples = int(n_samples / 4)
     mcmc_n_samples = int(n_samples / 4) 
@@ -203,6 +218,7 @@ def mixed_test_set(c_vec, A_mat, b_vec, n_samples, scale=1):
         scale=scale,
     )
 
+    # init_pt = shake_n_bake_init(A_mat[0], A_mat, b_vec)
     init_pt = shake_n_bake_init(c_vec, A_mat, b_vec)
     mcmc_infeas_pts = shake_n_bake_infeas(
         A_mat,
@@ -217,36 +233,14 @@ def mixed_test_set(c_vec, A_mat, b_vec, n_samples, scale=1):
     for xi in X_test:
         y_test.append(int(is_feasible(A_mat, b_vec, xi)))
     print(
-        'Generated {} feasible and {} infeasible pts for testing.'.format(
-            np.sum(y_test), len(y_test) - np.sum(y_test)
+        'Generated {} feasible and {} ({}, {}) infeasible pts for testing.'.format(
+            np.sum(y_test),
+            len(y_test) - np.sum(y_test),
+            len(proj_infeas_pts),
+            len(mcmc_infeas_pts),
         )
     )
     return X_test, np.array(y_test)
-
-
-def OLD_shake_n_bake_test_set(A_mat, b_vec, init_pt, n_samples, scale=1e-2):
-    """
-    Generate points that are right on the boundary. Add some noise and label
-    """
-    dataset = []
-    labels = []
-    bd_pt = init_pt
-    scale = np.linalg.norm(b_vec) * scale 
-    for ix in tqdm(range(n_samples)):
-        r = direction_sample(A_mat, b_vec, bd_pt)
-        if np.random.rand() < 0.5:
-            noisy_pt = bd_pt - scale * r
-        else:
-            noisy_pt = bd_pt + scale * r
-        dataset.append(noisy_pt)
-        labels.append(int(is_feasible(A_mat, b_vec, noisy_pt)))
-        bd_pt = get_next_bd_pt(A_mat, b_vec, bd_pt, r)
-    print(
-        'Generated {} feasible and {} infeasible pts.'.format(
-            np.sum(labels), n_samples - np.sum(labels)
-        )
-    )
-    return np.array(dataset), np.array(labels)
 
 
 def shake_n_bake_infeas(A_mat, b_vec, init_pt, n_samples=10, scale=1, b_hid=[0]):
@@ -325,12 +319,27 @@ def constraint_projection_sampler(A_mat, b_vec, feas_pts, n_samples=200, scale=1
     return np.array(infeas_pts)
 
 
+def label_feas(A_mat, b_vec, pt, tol=1e-5):
+    m = len(b_vec)
+    true_tol = np.linalg.norm(b_vec) * tol
+    if is_feasible(A_mat, b_vec, pt):
+        label = m
+    else:
+        labels = []
+        for ix in range(m):
+            if np.dot(A_mat[ix], pt) < b_vec[ix] - true_tol:
+                labels.append(ix)
+        label = np.random.choice(labels)
+    return label
+
+
 def experiment_MCMC(
         fname, 
         n_samples=200,
         randomizer=np.random.rand,
         test_size=0.5,
         scale=1,
+        multiclass=True,
     ):
     data = pickle.load(open(fname, 'rb'))
     c_vec = data['c_vec']
@@ -370,9 +379,9 @@ def experiment_MCMC(
     assert all(feas_check), 'Generated feasible point instead of infeasible'
     print('MCMC {} points'.format(len(mcmc_infeas_pts)))
     
-    dist_mcmc = haussdorf(feas_pts, mcmc_infeas_pts, inner=np.min, outer=np.min) 
-    dist_proj = haussdorf(feas_pts, proj_infeas_pts, inner=np.min, outer=np.min) 
-    print('MCMC {} PROJ {}'.format(dist_mcmc, dist_proj))
+    # dist_mcmc = haussdorf(feas_pts, mcmc_infeas_pts, inner=np.min, outer=np.min) 
+    # dist_proj = haussdorf(feas_pts, proj_infeas_pts, inner=np.min, outer=np.min) 
+    # print('MCMC {} PROJ {}'.format(dist_mcmc, dist_proj))
 
     # Evaluate models
     print('Generating testing data ... ')
@@ -384,26 +393,79 @@ def experiment_MCMC(
     proj_infeas_pts = proj_infeas_pts[:n_pts]
     mcmc_infeas_pts = mcmc_infeas_pts[:n_pts]
     print('Training and testing models ...')
-    proj_acc = train_and_test_classifier(
-        feas_pts,
-        proj_infeas_pts,
-        X_test=X_test,
-        y_test=y_test,
-        model=LinearSVC,
-    )
-    mcmc_acc = train_and_test_classifier(
-        feas_pts,
-        mcmc_infeas_pts,
-        X_test=X_test,
-        y_test=y_test,
-        model=LinearSVC,
-    )
+    if multiclass == True:
+        proj_acc = train_and_test_multiclassifier(
+            feas_pts,
+            proj_infeas_pts,
+            X_test,
+            A_mat,
+            b_vec,
+            model=LinearSVC
+        )
+        mcmc_acc = train_and_test_multiclassifier(
+            feas_pts,
+            mcmc_infeas_pts,
+            X_test,
+            A_mat,
+            b_vec,
+            model=LinearSVC
+        )
+    else:
+        proj_acc = train_and_test_classifier(
+            feas_pts,
+            proj_infeas_pts,
+            X_test=X_test,
+            y_test=y_test,
+            model=AdaBoostClassifier,
+        )
+        mcmc_acc = train_and_test_classifier(
+            feas_pts,
+            mcmc_infeas_pts,
+            X_test=X_test,
+            y_test=y_test,
+            model=AdaBoostClassifier,
+        )
+
     summary = {
         'proj_acc': proj_acc,
         'mcmc_acc': mcmc_acc,
     }
     print(summary)
     return summary
+
+
+def train_and_test_multiclassifier(
+        feas_pts,
+        infeas_pts,
+        X_test,
+        A_mat,
+        b_vec,
+        model=SVC,
+    ):
+    X_train = np.vstack((feas_pts, infeas_pts))
+    y_train = np.array(
+        [label_feas(A_mat, b_vec, pt) for pt in X_train]
+    )
+    y_test = np.array(
+        [label_feas(A_mat, b_vec, pt) for pt in X_test]
+    )
+    clf = model(class_weight='balanced')
+    clf.fit(X_train, y_train)
+    y_pred = clf.predict(X_test)
+    # pu.db
+
+    m = len(b_vec)
+    y_test[y_test < m] = 0
+    y_test[y_test == m] = 1
+    y_pred[y_pred < m] = 0
+    y_pred[y_pred == m] = 1
+    acc = 1 - np.mean(np.abs(y_test - y_pred))
+    print('Test set score = {}'.format(acc))
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+    print('TP = {} FP = {}'.format(tp, fp))
+    print('FN = {} TN = {}'.format(fn, tn))
+
+    return acc
 
 
 def train_and_test_classifier(
@@ -430,23 +492,23 @@ def train_and_test_classifier(
     return acc
 
 
-def sweep_n_tests():
-    fname = 'miplib/gen-ip021_R1.pickle'
-    rname = 'results/gen-ip021_R1.csv'
+def sweep_n_tests(fname, rname):
+    # fname = 'miplib/gen-ip021_R1.pickle'
+    # rname = 'results/gen-ip021_R1_{}.csv'.format(np.random.rand())
 
     summaries = []
     test_size = 1.0
-    n_samples = 500
-    n_tests = 20
+    n_samples = 5000
+    n_tests = 10
     MAX_TRIES = 50
     for trial in range(MAX_TRIES):
         if len(summaries) >= n_tests:
             break
         try:
             print('\n'+('*'*80))
-            print('Trial {}'.format(trial))
+            print('Trial {} ({})'.format(trial, len(summaries)))
             print('*'*80)
-            res = experiment_MCMC(fname, n_samples=n_samples, test_size=test_size)
+            res = experiment_MCMC(fname, n_samples=n_samples, test_size=test_size, multiclass=True)
             summaries.append(res)
         except Exception as inst:
             print(inst)
@@ -485,18 +547,20 @@ def sweep_test_size():
         print('\n'+('*'*80))
         print(test_size)
         print('*'*80)
-        experiment_MCMC(fname, n_samples=2000, test_size=test_size)
+        experiment_MCMC(fname, n_samples=5000, test_size=test_size, multiclass=True)
     print('DONE.')
-    exit()
+    # exit()
 
 
 if __name__ == "__main__":
-    sweep_n_tests()
+    # sweep_n_tests()
     # sweep_test_size()
+    # exit()
     # sweep_n_samples()
     # fname = 'miplib/gen-ip002_R1.pickle'
     # experiment_MCMC(fname, n_samples=100, test_size=0.5, randomizer=np.random.rand)
     p = Path('miplib/')
+    r = Path('results/')
     files_to_ignore = [
         Path('miplib/neos16_R1.pickle'),
         Path('miplib/markshare_4_0_R1.pickle'),
@@ -507,9 +571,13 @@ if __name__ == "__main__":
             continue
         if fname.suffix == '.pickle':
             print('\n'+('*'*80))
+            print('*'*80)
             print(fname)
             print('*'*80)
+            print('*'*80)
             # try:
-            experiment_MCMC(fname, n_samples=4000, test_size=0.9)
+            # rname = r / (fname.stem + '_{}.csv'.format(np.random.rand()))
+            # sweep_n_tests(fname, rname)
+            # experiment_MCMC(fname, n_samples=4000, test_size=0.9)
             # except:
             #     print('Some error.')

@@ -199,17 +199,19 @@ def find_and_replace_mps(pname, make_relaxation=False, n_relaxations=1):
         if fname.suffix == '.mps':
             print(fname)
             c_vec, A_mat, b_vec = readmps(fname)
-            b_vec = b_vec - np.random.exponential(scale=100, size=len(b_vec))
             for ix in range(len(A_mat)):
                 A_mat[ix] = A_mat[ix] / np.linalg.norm(A_mat[ix])
                 b_vec[ix] = b_vec[ix] / np.linalg.norm(A_mat[ix])
+            scale = max(np.max(np.abs(A_mat)), np.max(np.abs(b_vec)))
+            print('scale = {}'.format(scale))
+            b_vec = b_vec - np.random.exponential(scale=scale, size=len(b_vec))
             print('... read')
             feas_exists = check_lpsolver(c_vec, A_mat, b_vec)
             if feas_exists is True:
                 m, n = A_mat.shape
                 if make_relaxation is True:
                     for ix in range(n_relaxations):
-                        b_relax = b_vec - np.random.exponential(scale=1, size=m)
+                        b_relax = b_vec - np.random.exponential(scale=scale, size=m)
                         feas_set = { 
                             'A_mat': A_mat,
                             'b_vec': b_vec,
@@ -228,6 +230,12 @@ def find_and_replace_mps(pname, make_relaxation=False, n_relaxations=1):
 
             else:
                 print('... is invalid')
+
+
+def generate_pentagon():
+    m = 5
+    n = 2
+    c_vec = np.ones(2)
 
 
 if __name__ == "__main__":
