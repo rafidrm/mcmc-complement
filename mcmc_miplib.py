@@ -14,11 +14,14 @@ import pickle
 from pprint import pprint
 import pulp
 from scipy.optimize import linprog
+from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split
 from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier 
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import GridSearchCV
+from sklearn.neighbors import KernelDensity
 from sklearn.neural_network import MLPClassifier
 from tqdm import tqdm
 
@@ -426,9 +429,17 @@ def experiment_MCMC(
             model=AdaBoostClassifier,
         )
 
+    gaus_acc = train_and_test_kde(
+    # gaus_acc = train_and_test_gmm(
+        feas_pts,
+        X_test,
+        y_test,
+    )
+
     summary = {
         'proj_acc': proj_acc,
         'mcmc_acc': mcmc_acc,
+        'gaus_acc': gaus_acc,
     }
     print(summary)
     return summary
@@ -492,13 +503,71 @@ def train_and_test_classifier(
     return acc
 
 
-def sweep_n_tests(fname, rname):
-    # fname = 'miplib/gen-ip021_R1.pickle'
-    # rname = 'results/gen-ip021_R1_{}.csv'.format(np.random.rand())
+def train_and_test_gmm(feas_pts, X_test, y_test):
+    # n_components = [ 5 ]
+    n_components = [ 1, 5, 10, 20, 50, 100]
+    accs = []
+    for comp in n_components:
+        # train gmm
+        mdl = GaussianMixture(n_components=comp)
+        try:
+            mdl.fit(feas_pts)
+            # pu.db
+            scores = -1 / mdl.score_samples(feas_pts)
+            min_score = np.min(scores)
+            # test classifier
+            y_pred = -1 / mdl.score_samples(X_test)
+            y_pred[y_pred < min_score] = 0
+            y_pred[y_pred >= min_score] = 1
+
+            acc = 1 - np.mean(np.abs(y_test - y_pred))
+            print('Component {} \t Test set score = {}'.format(comp, acc))
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+            print('TP = {} FP = {}'.format(tp, fp))
+            print('FN = {} TN = {}'.format(fn, tn))
+            accs.append(acc)
+        except Exception as inst:
+            print(inst)
+    return np.max(accs)
+
+
+def train_and_test_kde(feas_pts, X_test, y_test):
+    pca = PCA(0.9)
+    X_train = pca.fit_transform(feas_pts)
+    
+    # use grid search cross-validation to optimize the bandwidth
+    accs = []
+    n_bandwidths = [ 0.1, 0.5, 1, 5, 10, 20, 50, 100 ]
+    for bw in n_bandwidths:
+        kde = KernelDensity(bandwidth=bw)
+        try:
+            kde.fit(X_train)
+            
+            min_score = np.min(kde.score_samples(X_train))
+            y_pred = kde.score_samples(pca.transform(X_test))
+            y_pred[y_pred < min_score] = 0
+            y_pred[y_pred >= min_score] = 1
+            
+            acc = 1 - np.mean(np.abs(y_test - y_pred))
+            print('Test set score = {}'.format(acc))
+            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+            print('TP = {} FP = {}'.format(tp, fp))
+            print('FN = {} TN = {}'.format(fn, tn))
+            accs.append(acc)
+        except Exception as inst:
+            print(inst)
+    return np.max(accs)
+
+
+def sweep_n_tests(fname='', rname=''):
+    if fname == '':
+        fname = 'miplib/gen-ip021_R1.pickle'
+    if rname == '':
+        rname = 'results/gen-ip021_R1_{}.csv'.format(np.random.rand())
 
     summaries = []
     test_size = 1.0
-    n_samples = 5000
+    n_samples = 4000
     n_tests = 10
     MAX_TRIES = 50
     for trial in range(MAX_TRIES):
@@ -508,7 +577,8 @@ def sweep_n_tests(fname, rname):
             print('\n'+('*'*80))
             print('Trial {} ({})'.format(trial, len(summaries)))
             print('*'*80)
-            res = experiment_MCMC(fname, n_samples=n_samples, test_size=test_size, multiclass=True)
+            res = experiment_MCMC(fname, n_samples=n_samples, test_size=test_size, multiclass=False)
+            # res = experiment_MCMC(fname, n_samples=n_samples, test_size=test_size, multiclass=True)
             summaries.append(res)
         except Exception as inst:
             print(inst)
@@ -531,7 +601,7 @@ def sweep_n_tests(fname, rname):
     print('Min mcmc acc: {}'.format(np.min(mcmc_acc)))
     df = pd.DataFrame(summaries)
     df.to_csv(rname, index=False)
-    exit()
+    # exit()
 
 
 def sweep_test_size():
@@ -547,12 +617,60 @@ def sweep_test_size():
         print('\n'+('*'*80))
         print(test_size)
         print('*'*80)
-        experiment_MCMC(fname, n_samples=5000, test_size=test_size, multiclass=True)
+        experiment_MCMC(fname, n_samples=n_samples, test_size=test_size, multiclass=False)
     print('DONE.')
     # exit()
 
 
+def test_toy_probs():
+    fname = 'miplib/pentagon.pickle'
+    MAX_TRIES=20
+    n_tests=10
+    n_samples=1000
+    test_size=1.0
+    summaries = []
+    for trial in range(MAX_TRIES):
+        if len(summaries) >= n_tests:
+            break
+        try:
+            print('\n'+('*'*80))
+            print('Trial {} ({})'.format(trial, len(summaries)))
+            print('*'*80)
+            res = experiment_MCMC(fname, n_samples=n_samples, test_size=test_size, multiclass=False)
+            summaries.append(res)
+        except Exception as inst:
+            print(inst)
+    print('\n\n'+('*'*80))
+    print('Summary.')
+    print('*'*80)
+    print('\n')
+    proj_acc = np.array([ x['proj_acc'] for x in summaries ])
+    mcmc_acc = np.array([ x['mcmc_acc'] for x in summaries ])
+    gaus_acc = np.array([ x['gaus_acc'] for x in summaries ])
+    print('proj:')
+    print(proj_acc)
+    print('mcmc:')
+    print(mcmc_acc)
+    print('gaus:')
+    print(gaus_acc)
+    print('')
+    print('Max proj acc: {}'.format(np.max(proj_acc)))
+    print('Mean proj acc: {}'.format(np.mean(proj_acc)))
+    print('Min proj acc: {}'.format(np.min(proj_acc)))
+    print('Max mcmc acc: {}'.format(np.max(mcmc_acc)))
+    print('Mean mcmc acc: {}'.format(np.mean(mcmc_acc)))
+    print('Min mcmc acc: {}'.format(np.min(mcmc_acc)))
+    print('Max gaus acc: {}'.format(np.max(gaus_acc)))
+    print('Mean gaus acc: {}'.format(np.mean(gaus_acc)))
+    print('Min gaus acc: {}'.format(np.min(gaus_acc)))
+    
+    
+    exit()
+
+
+
 if __name__ == "__main__":
+    # test_toy_probs()
     # sweep_n_tests()
     # sweep_test_size()
     # exit()
@@ -576,8 +694,8 @@ if __name__ == "__main__":
             print('*'*80)
             print('*'*80)
             # try:
-            # rname = r / (fname.stem + '_{}.csv'.format(np.random.rand()))
-            # sweep_n_tests(fname, rname)
+            rname = r / (fname.stem + '_{}_binary.csv'.format(np.random.rand()))
+            sweep_n_tests(fname, rname)
             # experiment_MCMC(fname, n_samples=4000, test_size=0.9)
             # except:
             #     print('Some error.')
