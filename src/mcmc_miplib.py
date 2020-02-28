@@ -145,17 +145,17 @@ def hit_n_run(c_vec, A_mat, b_vec, n_samples=200):
     print('Sampled {} points for HR'.format(len(pts)))
     return pts
 
-    
-def direction_sample_helper(con):
+
+def direction_sample_helper(cons):
     """ Samples a random point from the unit ball then checks with
     the a vector that con'pt > 0
     """
     wrong_direction = 1
-    n = len(con)
+    n = len(cons[0])
     while wrong_direction == 1:
         pt = np.random.rand(n) - 0.5
         pt = pt / np.linalg.norm(pt)
-        if np.dot(con, pt) >= 0:
+        if all([np.dot(con, pt) >= 0 for con in cons]):
             wrong_direction = 0
     return pt
 
@@ -165,12 +165,14 @@ def direction_sample(A_mat, b_vec, bd_pt):
     then calls sample helper.
     """
     delta = np.abs(np.dot(A_mat, bd_pt) - b_vec)
-    ind = np.argmin(delta)
-    val = np.min(delta)
-    if val > ATOL:
-        print('No boundary, gap is {}'.format(val))
-    con = A_mat[ind]
-    return direction_sample_helper(con)
+    cons = [ A_mat[ix] for ix in range(len(delta)) if delta[ix] < ATOL ]
+    assert len(cons) > 0, 'This is not a boundary point.'
+    #ind = np.argmin(delta)
+    #val = np.min(delta)
+    #if val > ATOL:
+    #    print('No boundary, gap is {}'.format(val))
+    #con = A_mat[ind]
+    return direction_sample_helper(cons)
 
 
 def get_next_bd_pt(A_mat, b_vec, bd_pt, dir_pt):
@@ -677,12 +679,12 @@ if __name__ == "__main__":
     # sweep_n_samples()
     # fname = 'miplib/gen-ip002_R1.pickle'
     # experiment_MCMC(fname, n_samples=100, test_size=0.5, randomizer=np.random.rand)
-    p = Path('miplib/')
-    r = Path('results/')
+    p = Path('../miplib/')
+    r = Path('../results/')
     files_to_ignore = [
-        Path('miplib/neos16_R1.pickle'),
-        Path('miplib/markshare_4_0_R1.pickle'),
-        Path('miplib/timtab1CUTS_R1.pickle'), # cannot start hitnrun
+        Path('../miplib/neos16_R1.pickle'),
+        Path('../miplib/markshare_4_0_R1.pickle'),
+        Path('../miplib/timtab1CUTS_R1.pickle'), # cannot start hitnrun
     ]
     for fname in p.iterdir():
         if fname in files_to_ignore:

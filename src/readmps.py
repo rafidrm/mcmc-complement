@@ -242,5 +242,5 @@ def generate_pentagon():
 if __name__ == "__main__":
     # fname = 'miplib/gen-ip054.mps'
     # readmps(fname)
-    pname = 'miplib/'
+    pname = '../miplib/'
     find_and_replace_mps(pname, make_relaxation=True)
