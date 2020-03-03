@@ -59,13 +59,7 @@ def hit_n_run_init(c_vec, A_mat, b_vec):
         A_mat,
         b_vec + np.random.exponential(scale=1e-1)
     )
-    # vtx1 = lp_solver(
-    #     c_vec,
-    #     A_mat,
-    #     b_vec
-    # )
     vertices = [vtx0]
-    # vertices = [vtx0, vtx1]
     for row in A_mat:
         vtx2 = lp_solver(
             row,
@@ -138,7 +132,7 @@ def hit_n_run(c_vec, A_mat, b_vec, n_samples=200):
             pts.append(curr_pt)
             # if len(pts) > 0.9 * n_samples:
             #     break
-    if len(pts) < min(0.1 * n_samples, 100):
+    if len(pts) < min(0.5 * n_samples, 500):
         raise Exception(
             'Sampled {} points instead of {}'.format(len(pts), 0.5 * n_samples)
         )
@@ -152,11 +146,15 @@ def direction_sample_helper(cons):
     """
     wrong_direction = 1
     n = len(cons[0])
-    while wrong_direction == 1:
+    while wrong_direction > 0:
         pt = np.random.rand(n) - 0.5
         pt = pt / np.linalg.norm(pt)
         if all([np.dot(con, pt) >= 0 for con in cons]):
             wrong_direction = 0
+        else:
+            wrong_direction += 1
+            if wrong_direction > 1e12:
+                raise Exception('Direction sampler stuck.')
     return pt
 
 
@@ -246,6 +244,41 @@ def mixed_test_set(c_vec, A_mat, b_vec, n_samples, scale=1):
         )
     )
     return X_test, np.array(y_test)
+
+
+def mcmc_test_set(c_vec, A_mat, b_vec, n_samples, scale=1):
+    """
+    Will generate feasible points using hitnrun.
+    and infeasible points using shakenbake and projection.
+    """
+    A_mat, b_vec = shuffle_A_b(A_mat, b_vec)
+    feas_n_samples = int(n_samples / 2)
+    mcmc_n_samples = int(n_samples / 2) 
+    feas_pts = hit_n_run(c_vec, A_mat, b_vec, n_samples=feas_n_samples)
+    feas_pts = np.array(feas_pts)
+
+    # init_pt = shake_n_bake_init(A_mat[0], A_mat, b_vec)
+    init_pt = shake_n_bake_init(c_vec, A_mat, b_vec)
+    mcmc_infeas_pts = shake_n_bake_infeas(
+        A_mat,
+        b_vec,
+        init_pt,
+        n_samples=mcmc_n_samples,
+        scale=scale
+    )
+    
+    X_test = np.vstack([feas_pts, mcmc_infeas_pts])
+    y_test = []
+    for xi in X_test:
+        y_test.append(int(is_feasible(A_mat, b_vec, xi)))
+    print(
+        'Generated {} feasible and {} infeasible pts for testing.'.format(
+            np.sum(y_test),
+            len(y_test) - np.sum(y_test),
+        )
+    )
+    return X_test, np.array(y_test)
+
 
 
 def shake_n_bake_infeas(A_mat, b_vec, init_pt, n_samples=10, scale=1, b_hid=[0]):
@@ -390,7 +423,8 @@ def experiment_MCMC(
 
     # Evaluate models
     print('Generating testing data ... ')
-    X_test, y_test = mixed_test_set(c_vec, A_mat, b_vec, n_samples, scale=scale)
+    X_test, y_test = mcmc_test_set(c_vec, A_mat, b_vec, n_samples, scale=scale)
+    # X_test, y_test = mixed_test_set(c_vec, A_mat, b_vec, n_samples, scale=scale)
     n_feas = len(feas_pts)
     n_infeas = min(len(proj_infeas_pts), len(mcmc_infeas_pts))
     n_pts = min(n_feas, n_infeas)
@@ -399,7 +433,7 @@ def experiment_MCMC(
     mcmc_infeas_pts = mcmc_infeas_pts[:n_pts]
     print('Training and testing models ...')
     if multiclass == True:
-        proj_acc = train_and_test_multiclassifier(
+        proj_res = train_and_test_multiclassifier(
             feas_pts,
             proj_infeas_pts,
             X_test,
@@ -407,7 +441,7 @@ def experiment_MCMC(
             b_vec,
             model=LinearSVC
         )
-        mcmc_acc = train_and_test_multiclassifier(
+        mcmc_res = train_and_test_multiclassifier(
             feas_pts,
             mcmc_infeas_pts,
             X_test,
@@ -416,22 +450,24 @@ def experiment_MCMC(
             model=LinearSVC
         )
     else:
-        proj_acc = train_and_test_classifier(
+        proj_res = train_and_test_classifier(
             feas_pts,
             proj_infeas_pts,
             X_test=X_test,
             y_test=y_test,
-            model=AdaBoostClassifier,
+            model=GradientBoostingClassifier,
+            # model=AdaBoostClassifier,
         )
-        mcmc_acc = train_and_test_classifier(
+        mcmc_res = train_and_test_classifier(
             feas_pts,
             mcmc_infeas_pts,
             X_test=X_test,
             y_test=y_test,
-            model=AdaBoostClassifier,
+            model=GradientBoostingClassifier,
+            # model=AdaBoostClassifier,
         )
 
-    gaus_acc = train_and_test_kde(
+    gaus_res = train_and_test_kde(
     # gaus_acc = train_and_test_gmm(
         feas_pts,
         X_test,
@@ -439,11 +475,11 @@ def experiment_MCMC(
     )
 
     summary = {
-        'proj_acc': proj_acc,
-        'mcmc_acc': mcmc_acc,
-        'gaus_acc': gaus_acc,
+        'proj_res': proj_res,
+        'mcmc_res': mcmc_res,
+        'gaus_res': gaus_res,
     }
-    print(summary)
+    pprint(summary)
     return summary
 
 
@@ -473,12 +509,21 @@ def train_and_test_multiclassifier(
     y_pred[y_pred < m] = 0
     y_pred[y_pred == m] = 1
     acc = 1 - np.mean(np.abs(y_test - y_pred))
-    print('Test set score = {}'.format(acc))
+    print('MDL Test set score = {}'.format(acc))
     tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
     print('TP = {} FP = {}'.format(tp, fp))
     print('FN = {} TN = {}'.format(fn, tn))
 
-    return acc
+    res = {
+        'acc': acc,
+        'tn': tn,
+        'fp': fp,
+        'fn': fn,
+        'tp': tp,
+        'prec': tp / (tp + fp),
+        'rec': tp / (tp + fn),
+    }
+    return res
 
 
 def train_and_test_classifier(
@@ -497,75 +542,104 @@ def train_and_test_classifier(
     clf = model()
     clf.fit(X_train, y_train)
     acc = clf.score(X_test, y_test)
-    print('Test set score = {}'.format(acc))
+    print('MDL Test set score = {}'.format(acc))
     tn, fp, fn, tp = confusion_matrix(y_test, clf.predict(X_test)).ravel()
     print('TP = {} FP = {}'.format(tp, fp))
     print('FN = {} TN = {}'.format(fn, tn))
 
-    return acc
+    res = {
+        'acc': acc,
+        'tn': tn,
+        'fp': fp,
+        'fn': fn,
+        'tp': tp,
+        'prec': tp / (tp + fp + DEFAULT_ATOL),
+        'rec': tp / (tp + fn + DEFAULT_ATOL),
+    }
+    return res
 
 
 def train_and_test_gmm(feas_pts, X_test, y_test):
     # n_components = [ 5 ]
-    n_components = [ 1, 5, 10, 20, 50, 100]
-    accs = []
+    n_components = [ 1, 5, 10, 20, 50, 100, 500]
+    max_acc = 0
     for comp in n_components:
         # train gmm
         mdl = GaussianMixture(n_components=comp)
         try:
             mdl.fit(feas_pts)
             # pu.db
-            scores = -1 / mdl.score_samples(feas_pts)
-            min_score = np.min(scores)
+            min_score = np.min(-1 / mdl.score_samples(feas_pts))
             # test classifier
             y_pred = -1 / mdl.score_samples(X_test)
-            y_pred[y_pred < min_score] = 0
-            y_pred[y_pred >= min_score] = 1
+            y_pred[y_pred > min_score] = 1
+            y_pred[y_pred <= min_score] = 0
 
             acc = 1 - np.mean(np.abs(y_test - y_pred))
             print('Component {} \t Test set score = {}'.format(comp, acc))
             tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
             print('TP = {} FP = {}'.format(tp, fp))
             print('FN = {} TN = {}'.format(fn, tn))
-            accs.append(acc)
+            if acc > max_acc:
+                res = {
+                    'acc': acc,
+                    'tn': tn,
+                    'fp': fp,
+                    'fn': fn,
+                    'tp': tp,
+                    'prec': tp / (tp + fp + DEFAULT_ATOL),
+                    'rec': tp / (tp + fn + DEFAULT_ATOL),
+                }
         except Exception as inst:
             print(inst)
-    return np.max(accs)
-
-
-def train_and_test_kde(feas_pts, X_test, y_test):
-    pca = PCA(0.9)
-    X_train = pca.fit_transform(feas_pts)
     
-    # use grid search cross-validation to optimize the bandwidth
-    accs = []
-    n_bandwidths = [ 0.1, 0.5, 1, 5, 10, 20, 50, 100 ]
-    for bw in n_bandwidths:
-        kde = KernelDensity(bandwidth=bw)
-        try:
-            kde.fit(X_train)
-            
-            min_score = np.min(kde.score_samples(X_train))
-            y_pred = kde.score_samples(pca.transform(X_test))
-            y_pred[y_pred < min_score] = 0
-            y_pred[y_pred >= min_score] = 1
-            
-            acc = 1 - np.mean(np.abs(y_test - y_pred))
-            print('Test set score = {}'.format(acc))
-            tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
-            print('TP = {} FP = {}'.format(tp, fp))
-            print('FN = {} TN = {}'.format(fn, tn))
-            accs.append(acc)
-        except Exception as inst:
-            print(inst)
-    return np.max(accs)
+    return res
+
+
+def train_and_test_kde(feas_pts, X_test, y_test, n_components=0.95):
+    pca = PCA(0.95)
+    X_train = pca.fit_transform(feas_pts)
+    X_test = pca.transform(X_test)
+
+    params = {
+        'bandwidth': [0.01, 0.05, 0.1, 0.5, 1, 5, 10],
+    }
+    grid = GridSearchCV(KernelDensity(), params)
+    grid.fit(X_train)
+    kde = grid.best_estimator_
+    kde.thresh = np.min(np.exp(kde.score_samples(X_train)))
+    y_pred = np.exp(kde.score_samples(X_test))
+
+    y_pred[y_pred > kde.thresh] = 1
+    y_pred[y_pred < kde.thresh] = 0
+    y_pred[y_pred == kde.thresh] = 1
+
+    acc = 1 - np.mean(np.abs(y_test - y_pred))
+    
+    print('KDE Test set score = {}'.format(acc))
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+    print('TP = {} FP = {}'.format(tp, fp))
+    print('FN = {} TN = {}'.format(fn, tn))
+
+    res = {
+        'bw': kde.bandwidth,
+        'thresh': kde.thresh,
+        'acc': acc,
+        'tn': tn,
+        'fp': fp,
+        'fn': fn,
+        'tp': tp,
+        'prec': tp / (tp + fp + DEFAULT_ATOL),
+        'rec': tp / (tp + fn + DEFAULT_ATOL),
+    }
+    return res
 
 
 def sweep_n_tests(fname='', rname=''):
     if fname == '':
-        fname = 'miplib/gen-ip021_R1.pickle'
+        fname = '../miplib/gen-ip021_R1.pickle'
     if rname == '':
-        rname = 'results/gen-ip021_R1_{}.csv'.format(np.random.rand())
+        rname = '../results/gen-ip021_R1_{}.csv'.format(np.random.rand())
 
     summaries = []
     test_size = 1.0
@@ -588,19 +662,42 @@ def sweep_n_tests(fname='', rname=''):
     print('Summary.')
     print('*'*80)
     print('\n')
-    proj_acc = np.array([ x['proj_acc'] for x in summaries ])
-    mcmc_acc = np.array([ x['mcmc_acc'] for x in summaries ])
+    # accuracy
+    proj_acc = np.array([ x['proj_res']['acc'] for x in summaries ])
+    mcmc_acc = np.array([ x['mcmc_res']['acc'] for x in summaries ])
+    gaus_acc = np.array([ x['gaus_res']['acc'] for x in summaries ])
+    # recall 
+    proj_rec = np.array([ x['proj_res']['rec'] for x in summaries ])
+    mcmc_rec = np.array([ x['mcmc_res']['rec'] for x in summaries ])
+    gaus_rec = np.array([ x['gaus_res']['rec'] for x in summaries ])
+    # precision 
+    proj_prec = np.array([ x['proj_res']['prec'] for x in summaries ])
+    mcmc_prec = np.array([ x['mcmc_res']['prec'] for x in summaries ])
+    gaus_prec = np.array([ x['gaus_res']['prec'] for x in summaries ])
     print('proj:')
     print(proj_acc)
     print('mcmc:')
     print(mcmc_acc)
-    print('')
+    print('gaus:')
+    print(gaus_acc)
+    print('*** proj ***')
     print('Max proj acc: {}'.format(np.max(proj_acc)))
     print('Mean proj acc: {}'.format(np.mean(proj_acc)))
     print('Min proj acc: {}'.format(np.min(proj_acc)))
+    print('proj rec: {}'.format(np.mean(proj_rec)))
+    print('proj prec: {}'.format(np.mean(proj_prec)))
+    print('*** mcmc ***')
     print('Max mcmc acc: {}'.format(np.max(mcmc_acc)))
     print('Mean mcmc acc: {}'.format(np.mean(mcmc_acc)))
     print('Min mcmc acc: {}'.format(np.min(mcmc_acc)))
+    print('mcmc rec: {}'.format(np.mean(mcmc_rec)))
+    print('mcmc prec: {}'.format(np.mean(mcmc_prec)))
+    print('*** gaus ***')
+    print('Max gaus acc: {}'.format(np.max(gaus_acc)))
+    print('Mean gaus acc: {}'.format(np.mean(gaus_acc)))
+    print('Min gaus acc: {}'.format(np.min(gaus_acc)))
+    print('gaus rec: {}'.format(np.mean(gaus_rec)))
+    print('gaus prec: {}'.format(np.mean(gaus_prec)))
     df = pd.DataFrame(summaries)
     df.to_csv(rname, index=False)
     # exit()
@@ -625,7 +722,7 @@ def sweep_test_size():
 
 
 def test_toy_probs():
-    fname = 'miplib/pentagon.pickle'
+    fname = '../miplib/pentagon.pickle'
     MAX_TRIES=20
     n_tests=10
     n_samples=1000
@@ -673,9 +770,9 @@ def test_toy_probs():
 
 if __name__ == "__main__":
     # test_toy_probs()
-    # sweep_n_tests()
+    sweep_n_tests()
     # sweep_test_size()
-    # exit()
+    exit()
     # sweep_n_samples()
     # fname = 'miplib/gen-ip002_R1.pickle'
     # experiment_MCMC(fname, n_samples=100, test_size=0.5, randomizer=np.random.rand)

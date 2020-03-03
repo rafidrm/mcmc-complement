@@ -205,7 +205,8 @@ def find_and_replace_mps(pname, make_relaxation=False, n_relaxations=1):
                 b_vec[ix] = b_vec[ix] / tmp_norm 
             scale = max(np.max(np.abs(A_mat)), np.max(np.abs(b_vec)))
             print('scale = {}'.format(scale))
-            b_vec = b_vec - np.random.exponential(scale=scale, size=len(b_vec))
+            b_vec = b_vec - scale 
+            # b_vec = b_vec - np.random.exponential(scale=scale, size=len(b_vec))
             print('... read')
             feas_exists = check_lpsolver(c_vec, A_mat, b_vec)
             if feas_exists is True:
