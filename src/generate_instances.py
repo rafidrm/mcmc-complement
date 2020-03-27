@@ -17,7 +17,8 @@ def check_lpsolver(c_vec, A_mat, b_vec):
     prob += pulp.lpSum([ ci * xi for ci, xi in zip(c_vec, x) ])
     for ix in range(m):
         prob += pulp.lpSum([ ai * xi for ai, xi in zip(A_mat[ix], x) ]) >= b_vec[ix], 'con{}'.format(ix)
-    prob.solve(pulp.GLPK(msg=0))
+    prob.solve(pulp.GUROBI_CMD(msg=0))
+    # prob.solve(pulp.GLPK(msg=0))
     if prob.status in [1, -2]:
         return True
     else:
@@ -115,6 +116,19 @@ def readmps(fname):
                         'name': parsed[0] + parsed[2] + 'LB',
                         'cols': {parsed[2]: -1},
                         'rhs': -1 * float(parsed[3]),
+                        'sign': 'G',
+                    }
+                elif parsed[0] in ['BV']:
+                    row_dict[parsed[0] + parsed[2] + 'UB'] = {
+                        'name': parsed[0] + parsed[2],
+                        'cols': {parsed[2]: -1},
+                        'rhs': 1,
+                        'sign': 'G',
+                    }
+                    row_dict[parsed[0] + parsed[2] + 'LB'] = {
+                        'name': parsed[0] + parsed[2],
+                        'cols': {parsed[2]: 1},
+                        'rhs': 0,
                         'sign': 'G',
                     }
                 elif parsed[0] in ['PL']:
@@ -311,6 +325,7 @@ def generate_instances_by_perturbations(pname, n_instances=1, scale_factor=1):
             print(fname)
             print('*'*80)
             c_vec, A_mat, b_vec = readmps(fname)
+            print(A_mat.shape)
             # normalize and make sure it is full dimensional
             for ix in range(len(A_mat)):
                 tmp_norm = np.linalg.norm(A_mat[ix])
@@ -322,7 +337,7 @@ def generate_instances_by_perturbations(pname, n_instances=1, scale_factor=1):
             # create relaxation
             check_feas = check_lpsolver(c_vec, A_mat, b_vec)
             if check_feas == False:
-                'This problem is already infeasible.'
+                print('This problem is already infeasible.')
                 continue
             # make sure relaxed versions are bounded and closed
             A_mat, b_vec = add_box_bounds(c_vec, A_mat, b_vec)
@@ -349,15 +364,5 @@ def generate_instances_by_perturbations(pname, n_instances=1, scale_factor=1):
 
 
 if __name__ == "__main__":
-    pname = '../miplib3/'
-    # generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.05)
-    generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.1)
-    # generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.15)
-    generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.2)
-    # generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.25)
-    generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.3)
-    # generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.35)
-    generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.4)
-    # generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.45)
-    generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.5)
-    # generate_instances_by_perturbations(pname, n_instances=1, scale_factor=0.0)
+    pname = '../assign1-5-8_v2/'
+    generate_instances_by_perturbations(pname, n_instances=40, scale_factor=1)

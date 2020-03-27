@@ -1,6 +1,8 @@
 # Project specific
 results/
-
+*.csv
+OLD_FILES/
+img/
 
 
 # Byte-compiled / optimized / DLL files
